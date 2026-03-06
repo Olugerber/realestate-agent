@@ -7,6 +7,19 @@ import { HandleUserActionCommand } from "../../realestate-ui/commands/handle-use
 import { SyncBackendStateCommand } from "../../realestate-ui/commands/sync-backend-state.js";
 import type { Subject } from "codascon";
 
+const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/;
+
+function reviveDates(value: unknown): unknown {
+  if (typeof value === "string" && ISO_RE.test(value)) return new Date(value);
+  if (Array.isArray(value)) return value.map(reviveDates);
+  if (value !== null && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) out[k] = reviveDates(v);
+    return out;
+  }
+  return value;
+}
+
 /** Clones a Subject instance, applying `updates` on top. */
 export function cloneSubject<T extends Subject>(prev: T, updates: Record<string, unknown> = {}): T {
   return Object.assign(Object.create(Object.getPrototypeOf(prev)) as T, prev, updates);
@@ -63,7 +76,7 @@ export function useActionHandler<T extends Subject>(
           result,
         });
 
-        setSubject((prev) => cloneSubject(prev, patch.updates));
+        setSubject((prev) => cloneSubject(prev, reviveDates(patch.updates) as Record<string, unknown>));
 
         if (patch.pendingNavigation) {
           handleNavigation(patch.pendingNavigation, subject);
