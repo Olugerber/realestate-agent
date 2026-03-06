@@ -1,0 +1,631 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# LocalEdge — Real Estate Agent Platform — UI Domain
+#
+# Purpose:
+#   Frontend codascon domain for the LocalEdge React application.
+#   Each backend Command maps to exactly one or more UI Subjects that render
+#   its output and route its user interactions back to the backend layer.
+#
+# Backend → UI Subject mapping:
+#   QualifyParticipantCommand  → BuyerWorkspaceView, SellerWorkspaceView
+#   MatchPropertyCommand       → ListingDetailView, BuyerWorkspaceView (match list)
+#   ProcessOfferCommand        → OfferNegotiationView
+#   ScheduleShowingCommand     → ShowingCalendarView
+#   AdvanceTransactionCommand  → TransactionTrackerView
+#   GenerateDisclosureCommand  → DisclosureWizardView
+#   (cross-cutting)            → DashboardView (agent command center)
+#
+# Backend return type → UI plain type mapping:
+#   WorkflowStep      → surfaces inside RenderSpec as "next step" banner
+#   MatchResult       → surfaces inside RenderSpec as scored listing cards
+#   ActionResult      → consumed by SyncBackendStateCommand as BackendPayload
+#   ComplianceCheck   → surfaces inside RenderSpec as wizard completion state
+#
+# Five UI Commands cover every interaction surface:
+#
+#   RenderViewCommand       → derive the RenderSpec (component tree + props) per view
+#   HandleUserActionCommand → translate a user gesture into a DispatchIntent (backend call)
+#   SyncBackendStateCommand → apply a backend result to the view's local state slice
+#   ValidateFormCommand     → validate form inputs before a DispatchIntent is fired
+#   NavigateCommand         → compute the RouteTarget when a view transitions
+#
+# Generated file structure (via `npx odetovibe realestate-ui.yaml --out src/`):
+#
+#   src/
+#   └── realestate-ui/
+#       ├── ViewTypes.ts          ← 8 view Subjects + ViewBase
+#       ├── ContextTypes.ts       ← all plain types (context, result, patch)
+#       └── commands/
+#           ├── RenderView.ts
+#           ├── HandleUserAction.ts
+#           ├── SyncBackendState.ts
+#           ├── ValidateForm.ts
+#           └── Navigate.ts
+#
+# Command hook wiring (cross-command dependencies):
+#   HandleUserActionCommand > OfferActionHandler
+#     → hooks validateForm: ValidateFormCommand
+#       (validates offer terms before the DispatchIntent is emitted)
+#
+#   SyncBackendStateCommand > OfferStateSync
+#     → hooks navigate: NavigateCommand
+#       (redirects to TransactionTrackerView when an offer is accepted)
+#
+#   RenderViewCommand > DisclosureRenderer
+#     → hooks validateForm: ValidateFormCommand
+#       (wizard renders real-time completion state via inline validation)
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+
+namespace: realestate-ui
+
+# ─── Domain Types ───────────────────────────────────────────────────────────────
+#
+# Types WITH `visitName`  → View Subjects (each is a renderable screen or panel)
+# Types WITHOUT `visitName` → Plain types (context props, result envelopes, patches)
+#
+domainTypes:
+
+  # ── Base type (shared interface for all view subjects) ────────────────────────
+
+  # Common identity surface every view carries: viewId, agentId, loadingState.
+  # Mirrors the way `Participant` anchors all backend subjects to a common identity.
+  ViewBase:
+
+  # ── View Subjects (the 8 screens that drive all dispatch) ─────────────────────
+
+  # Agent command center — active WorkflowSteps, portfolio health, quick links.
+  # Aggregates the "next step" output of every backend command in one glance.
+  DashboardView:
+    visitName: resolveDashboard
+
+  # Buyer journey panel — criteria editor, MatchResult list, QualifyParticipant output.
+  # Owns the buyer-facing qualification checklist and push-match alert feed.
+  BuyerWorkspaceView:
+    visitName: resolveBuyerWorkspace
+
+  # Seller journey panel — listing details, CMA, SellerQualifier output.
+  # Owns the seller-facing qualification checklist and disclosure kickoff.
+  SellerWorkspaceView:
+    visitName: resolveSellerWorkspace
+
+  # Property listing detail — photos, price, match score overlay, showing slot picker.
+  # Renders MatchResult gap analysis (e.g. "3 of 5 criteria met") per listing.
+  ListingDetailView:
+    visitName: resolveListingDetail
+
+  # Offer negotiation thread — versioned offer history, counter/accept/reject actions.
+  # Each OfferDocument version from the backend is a row in this view's timeline.
+  OfferNegotiationView:
+    visitName: resolveOfferNegotiation
+
+  # Showing calendar — slot grid, pending confirmations, post-showing feedback form.
+  # Maps directly to ScheduleShowingCommand's three-state lifecycle.
+  ShowingCalendarView:
+    visitName: resolveShowingCalendar
+
+  # Transaction milestone tracker — ordered step list, date-drift alerts, critical path.
+  # Renders AdvanceTransactionCommand's WorkflowStep output as a progress rail.
+  TransactionTrackerView:
+    visitName: resolveTransactionTracker
+
+  # Disclosure wizard — multi-step compliance form with live validation overlay.
+  # Renders GenerateDisclosureCommand's ComplianceCheck as a step-by-step checklist.
+  DisclosureWizardView:
+    visitName: resolveDisclosureWizard
+
+  # ── Plain types (context, result, and patch types) ─────────────────────────────
+
+  # Agent context carried into every render: agentId, brokerage, viewport, theme.
+  # Passed as the objectType to RenderViewCommand — equivalent to backend's Agent.
+  LayoutContext:
+
+  # A discrete user gesture: actionType (click, submit, select), sourceViewId, payload.
+  # The objectType for HandleUserActionCommand — thin envelope around DOM events.
+  UserAction:
+
+  # Backend response envelope: commandName + the result union
+  # (WorkflowStep | MatchResult | ActionResult | ComplianceCheck).
+  # Passed as objectType to SyncBackendStateCommand so each view knows
+  # which backend command produced the payload it is processing.
+  BackendPayload:
+
+  # Raw form field data: key-value record of field names to their current values.
+  # Passed as objectType to ValidateFormCommand — sourced from React controlled inputs.
+  FormValues:
+
+  # A navigation trigger: trigger (link | redirect | back | deepLink), targetHint, params.
+  # Passed as objectType to NavigateCommand — wraps router push/replace semantics.
+  NavigationEvent:
+
+  # Declarative component tree descriptor + data props returned by RenderViewCommand.
+  # Consumed by the React render layer to produce the final JSX tree without
+  # the Command itself knowing about React internals.
+  RenderSpec:
+
+  # The resolved backend call to fire: backendCommandName, serialized args,
+  # and an optional onSuccess navigation target (used by HandleUserActionCommand).
+  DispatchIntent:
+
+  # Immutable patch object describing which slices of the view's local state to update.
+  # Returned by SyncBackendStateCommand — applied via useReducer in the React layer.
+  ViewStatePatch:
+
+  # Validation result: fieldErrors record, isValid flag, global blockers array.
+  # Returned by ValidateFormCommand — consumed by both form renderers and action handlers.
+  ValidationReport:
+
+  # Resolved router destination: path string, params record, historyMode (push | replace).
+  # Returned by NavigateCommand — handed to the React Router navigate() call.
+  RouteTarget:
+
+# ─── Commands ───────────────────────────────────────────────────────────────────
+
+commands:
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # RenderViewCommand
+  #
+  # Given a view subject and the current LayoutContext, produce a RenderSpec
+  # describing the component tree and data props for that screen.
+  #
+  # This is the pure "what should the user see?" command — it has no side effects.
+  # All 8 views are covered; parameterization handles the two workspace variants
+  # (buyer / seller) which share a common chrome but diverge in content panels.
+  #
+  # Hook:
+  #   DisclosureRenderer → validateForm: ValidateFormCommand
+  #   The wizard renders live completion/error state by calling validateForm
+  #   on the current FormValues during execute(), keeping validation feedback
+  #   visible as the agent fills in disclosure answers step by step.
+  # ─────────────────────────────────────────────────────────────────────────────
+  RenderViewCommand:
+    commandName: renderView
+    baseType: ViewBase
+    objectType: LayoutContext
+    returnType: RenderSpec
+    subjectUnion:
+      - DashboardView
+      - BuyerWorkspaceView
+      - SellerWorkspaceView
+      - ListingDetailView
+      - OfferNegotiationView
+      - ShowingCalendarView
+      - TransactionTrackerView
+      - DisclosureWizardView
+    dispatch:
+      DashboardView: DashboardRenderer
+      BuyerWorkspaceView: WorkspaceRenderer.BuyerWorkspaceRenderer
+      SellerWorkspaceView: WorkspaceRenderer.SellerWorkspaceRenderer
+      ListingDetailView: ListingDetailRenderer
+      OfferNegotiationView: OfferRenderer
+      ShowingCalendarView: ShowingRenderer
+      TransactionTrackerView: TransactionRenderer
+      DisclosureWizardView: DisclosureRenderer
+    templates:
+      # Renders the agent dashboard: WorkflowStep banners from QualifyParticipant,
+      # at-a-glance portfolio counts, and shortcuts to the most urgent next actions.
+      DashboardRenderer:
+        isParameterized: false
+        subjectSubset: [DashboardView]
+        strategies: {}
+
+      # Abstract parameterized workspace renderer.
+      # Shared chrome (header, nav rail, loading skeleton) lives in execute();
+      # content panels are delegated to computePanels() in each Strategy.
+      WorkspaceRenderer:
+        isParameterized: true
+        subjectSubset: [BuyerWorkspaceView, SellerWorkspaceView]
+        strategies:
+          # Renders buyer criteria editor, MatchResult scored card list,
+          # pre-approval status badge, and QualifyParticipant checklist.
+          BuyerWorkspaceRenderer:
+            subjectSubset: [BuyerWorkspaceView]
+          # Renders seller listing details, CMA summary, pricing strategy panel,
+          # and SellerQualifier disclosure kickoff checklist.
+          SellerWorkspaceRenderer:
+            subjectSubset: [SellerWorkspaceView]
+
+      # Renders listing photos carousel, price/details, MatchResult gap analysis
+      # overlay (e.g. "3 of 5 must-haves met"), and showing slot picker entry point.
+      ListingDetailRenderer:
+        isParameterized: false
+        subjectSubset: [ListingDetailView]
+        strategies: {}
+
+      # Renders the versioned offer timeline (each OfferDocument as a thread row),
+      # the active offer terms summary, and the counter/accept/reject action bar.
+      OfferRenderer:
+        isParameterized: false
+        subjectSubset: [OfferNegotiationView]
+        strategies: {}
+
+      # Renders the showing calendar grid, pending slot confirmations,
+      # and the post-showing ShowingFeedback capture form.
+      ShowingRenderer:
+        isParameterized: false
+        subjectSubset: [ShowingCalendarView]
+        strategies: {}
+
+      # Renders the milestone progress rail, date-drift alert badges,
+      # and the critical-path risk flag surfaced by TransactionProgressTemplate.
+      TransactionRenderer:
+        isParameterized: false
+        subjectSubset: [TransactionTrackerView]
+        strategies: {}
+
+      # Renders multi-step disclosure wizard: current step question, progress indicator,
+      # and live ComplianceCheck completion state via the validateForm hook.
+      DisclosureRenderer:
+        isParameterized: false
+        subjectSubset: [DisclosureWizardView]
+        commandHooks:
+          validateForm: ValidateFormCommand
+        strategies: {}
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # HandleUserActionCommand
+  #
+  # Translates a user gesture (click, submit, select, drag) on a view into a
+  # DispatchIntent — the structured backend call to fire and its expected
+  # onSuccess navigation target.
+  #
+  # This is the "what should happen?" command — it owns the gesture-to-intent
+  # mapping for each screen without coupling the view layer to fetch calls.
+  #
+  # Hook:
+  #   OfferActionHandler → validateForm: ValidateFormCommand
+  #   Before emitting a SubmitOffer or CounterOffer DispatchIntent, the handler
+  #   calls validateForm on the current offer FormValues. If ValidationReport
+  #   is invalid, execute() returns a no-op DispatchIntent and surfaces errors.
+  # ─────────────────────────────────────────────────────────────────────────────
+  HandleUserActionCommand:
+    commandName: handleUserAction
+    baseType: ViewBase
+    objectType: UserAction
+    returnType: DispatchIntent
+    subjectUnion:
+      - DashboardView
+      - BuyerWorkspaceView
+      - SellerWorkspaceView
+      - ListingDetailView
+      - OfferNegotiationView
+      - ShowingCalendarView
+      - TransactionTrackerView
+      - DisclosureWizardView
+    dispatch:
+      DashboardView: DashboardActionHandler
+      BuyerWorkspaceView: WorkspaceActionHandler.BuyerActionHandler
+      SellerWorkspaceView: WorkspaceActionHandler.SellerActionHandler
+      ListingDetailView: ListingActionHandler
+      OfferNegotiationView: OfferActionHandler
+      ShowingCalendarView: ShowingActionHandler
+      TransactionTrackerView: TransactionActionHandler
+      DisclosureWizardView: DisclosureActionHandler
+    templates:
+      # Routes dashboard actions: open buyer workspace, open seller workspace,
+      # dismiss WorkflowStep banner, or navigate to a flagged transaction.
+      DashboardActionHandler:
+        isParameterized: false
+        subjectSubset: [DashboardView]
+        strategies: {}
+
+      # Abstract parameterized workspace action handler.
+      # Shared pre-flight checks (unsaved changes guard) in execute();
+      # intent resolution delegated to computeIntent() per Strategy.
+      WorkspaceActionHandler:
+        isParameterized: true
+        subjectSubset: [BuyerWorkspaceView, SellerWorkspaceView]
+        strategies:
+          # Routes buyer actions: update criteria → MatchPropertyCommand,
+          # request showing → ScheduleShowingCommand,
+          # submit offer → ProcessOfferCommand.
+          BuyerActionHandler:
+            subjectSubset: [BuyerWorkspaceView]
+          # Routes seller actions: review offer → ProcessOfferCommand,
+          # advance milestone → AdvanceTransactionCommand,
+          # start disclosure → GenerateDisclosureCommand.
+          SellerActionHandler:
+            subjectSubset: [SellerWorkspaceView]
+
+      # Routes listing actions: request showing → ScheduleShowingCommand,
+      # save to watchlist → local state, view comparable sales panel.
+      ListingActionHandler:
+        isParameterized: false
+        subjectSubset: [ListingDetailView]
+        strategies: {}
+
+      # Routes offer actions: counter, accept, reject → ProcessOfferCommand.
+      # Calls validateForm hook before emitting any mutation DispatchIntent.
+      OfferActionHandler:
+        isParameterized: false
+        subjectSubset: [OfferNegotiationView]
+        commandHooks:
+          validateForm: ValidateFormCommand
+        strategies: {}
+
+      # Routes showing actions: request slot → ScheduleShowingCommand,
+      # confirm/cancel/reschedule → ScheduleShowingCommand,
+      # submit feedback → ScheduleShowingCommand (feedback path).
+      ShowingActionHandler:
+        isParameterized: false
+        subjectSubset: [ShowingCalendarView]
+        strategies: {}
+
+      # Routes transaction actions: mark milestone complete → AdvanceTransactionCommand,
+      # view date-drift detail, escalate critical-path risk.
+      TransactionActionHandler:
+        isParameterized: false
+        subjectSubset: [TransactionTrackerView]
+        strategies: {}
+
+      # Routes disclosure actions: answer question → GenerateDisclosureCommand,
+      # navigate wizard step, submit completed packet.
+      DisclosureActionHandler:
+        isParameterized: false
+        subjectSubset: [DisclosureWizardView]
+        strategies: {}
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # SyncBackendStateCommand
+  #
+  # Applies a BackendPayload (the result of any backend command) to the target
+  # view's local state slice, returning a ViewStatePatch for useReducer dispatch.
+  #
+  # Each view owns its own state slice; this command ensures the right patch
+  # is computed for the right view without cross-slice contamination.
+  #
+  # Hook:
+  #   OfferStateSync → navigate: NavigateCommand
+  #   When the BackendPayload signals an accepted offer (ActionResult.status = "accepted"),
+  #   execute() calls navigate to compute the RouteTarget for TransactionTrackerView
+  #   and appends it to the ViewStatePatch as a pending navigation instruction.
+  # ─────────────────────────────────────────────────────────────────────────────
+  SyncBackendStateCommand:
+    commandName: syncBackendState
+    baseType: ViewBase
+    objectType: BackendPayload
+    returnType: ViewStatePatch
+    subjectUnion:
+      - DashboardView
+      - BuyerWorkspaceView
+      - SellerWorkspaceView
+      - ListingDetailView
+      - OfferNegotiationView
+      - ShowingCalendarView
+      - TransactionTrackerView
+      - DisclosureWizardView
+    dispatch:
+      DashboardView: DashboardStateSync
+      BuyerWorkspaceView: WorkspaceStateSync.BuyerStateSync
+      SellerWorkspaceView: WorkspaceStateSync.SellerStateSync
+      ListingDetailView: ListingStateSync
+      OfferNegotiationView: OfferStateSync
+      ShowingCalendarView: ShowingStateSync
+      TransactionTrackerView: TransactionStateSync
+      DisclosureWizardView: DisclosureStateSync
+    templates:
+      # Patches the dashboard's WorkflowStep list and portfolio counts
+      # after any backend command completes (QualifyParticipant primarily).
+      DashboardStateSync:
+        isParameterized: false
+        subjectSubset: [DashboardView]
+        strategies: {}
+
+      # Abstract parameterized workspace state sync.
+      # Shared patch scaffolding in execute(); slice-specific field updates
+      # delegated to computePatch() per Strategy.
+      WorkspaceStateSync:
+        isParameterized: true
+        subjectSubset: [BuyerWorkspaceView, SellerWorkspaceView]
+        strategies:
+          # Applies MatchResult cards, updated QualifyParticipant WorkflowStep,
+          # and FinancialProfile status to the buyer workspace state slice.
+          BuyerStateSync:
+            subjectSubset: [BuyerWorkspaceView]
+          # Applies SellerQualifier WorkflowStep, ComplianceCheck status,
+          # and updated listing details to the seller workspace state slice.
+          SellerStateSync:
+            subjectSubset: [SellerWorkspaceView]
+
+      # Applies updated MatchResult overlay and showing slot availability
+      # to the listing detail state slice after MatchProperty or ScheduleShowing.
+      ListingStateSync:
+        isParameterized: false
+        subjectSubset: [ListingDetailView]
+        strategies: {}
+
+      # Applies the new OfferDocument version to the offer thread.
+      # If ActionResult.status is "accepted", hooks navigate to route to
+      # TransactionTrackerView and appends the RouteTarget to the patch.
+      OfferStateSync:
+        isParameterized: false
+        subjectSubset: [OfferNegotiationView]
+        commandHooks:
+          navigate: NavigateCommand
+        strategies: {}
+
+      # Applies updated ShowingRequest state and ShowingFeedback data
+      # to the calendar view's slot grid and feedback form slice.
+      ShowingStateSync:
+        isParameterized: false
+        subjectSubset: [ShowingCalendarView]
+        strategies: {}
+
+      # Applies the updated MilestoneTimeline and WorkflowStep to
+      # the transaction progress rail, including date-drift recalculation.
+      TransactionStateSync:
+        isParameterized: false
+        subjectSubset: [TransactionTrackerView]
+        strategies: {}
+
+      # Applies ComplianceCheck result to the wizard's step completion map
+      # and surfaces any new blockers or required-field flags.
+      DisclosureStateSync:
+        isParameterized: false
+        subjectSubset: [DisclosureWizardView]
+        strategies: {}
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # ValidateFormCommand
+  #
+  # Validates FormValues for any form-bearing view and returns a ValidationReport.
+  # Only the four views that own mutable form inputs are in the subjectUnion —
+  # read-only views (DashboardView, ListingDetailView, ShowingCalendarView,
+  # TransactionTrackerView) never produce FormValues.
+  #
+  # Called both:
+  #   1. Inline during RenderViewCommand (DisclosureRenderer hook) for live feedback
+  #   2. Pre-flight during HandleUserActionCommand (OfferActionHandler hook)
+  #      before a mutation DispatchIntent is emitted
+  #
+  # OfferNegotiationView uses a parameterized template because offer validation
+  # branches: contingency dates/amounts and escrow timing have distinct rule sets.
+  # ─────────────────────────────────────────────────────────────────────────────
+  ValidateFormCommand:
+    commandName: validateForm
+    baseType: ViewBase
+    objectType: FormValues
+    returnType: ValidationReport
+    subjectUnion:
+      - BuyerWorkspaceView
+      - SellerWorkspaceView
+      - OfferNegotiationView
+      - DisclosureWizardView
+    dispatch:
+      BuyerWorkspaceView: BuyerFormValidator
+      SellerWorkspaceView: SellerFormValidator
+      OfferNegotiationView: OfferFormValidator.ContingencyValidator
+      DisclosureWizardView: DisclosureFormValidator
+    templates:
+      # Validates buyer criteria form: price range completeness, location specificity,
+      # at least one must-have selected, pre-approval document upload status.
+      BuyerFormValidator:
+        isParameterized: false
+        subjectSubset: [BuyerWorkspaceView]
+        strategies: {}
+
+      # Validates seller listing form: address verified, asking price within CMA range,
+      # disclosure checklist initiated, listing photos minimum count met.
+      SellerFormValidator:
+        isParameterized: false
+        subjectSubset: [SellerWorkspaceView]
+        strategies: {}
+
+      # Abstract parameterized offer validator — two distinct rule sets
+      # for the two structural halves of an offer document.
+      OfferFormValidator:
+        isParameterized: true
+        subjectSubset: [OfferNegotiationView]
+        strategies:
+          # Validates contingency fields: inspection period dates, financing contingency
+          # deadline, appraisal gap coverage amount, and waiver acknowledgements.
+          ContingencyValidator:
+            subjectSubset: [OfferNegotiationView]
+          # Validates escrow/earnest money fields: deposit amount meets threshold,
+          # escrow company selected, closing date is a valid business day.
+          EscrowValidator:
+            subjectSubset: [OfferNegotiationView]
+
+      # Validates disclosure wizard answers: required questions answered,
+      # conditional follow-ups triggered (e.g. flood zone → FEMA form required),
+      # and no contradictory answer pairs present.
+      DisclosureFormValidator:
+        isParameterized: false
+        subjectSubset: [DisclosureWizardView]
+        strategies: {}
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # NavigateCommand
+  #
+  # Given the current view subject and a NavigationEvent, computes the RouteTarget
+  # (path, params, push vs replace) that the React Router layer should execute.
+  #
+  # Each view knows its valid navigation targets — e.g. ListingDetailView can
+  # navigate to ShowingCalendarView or OfferNegotiationView but not directly to
+  # DisclosureWizardView. This encodes routing intent at the domain level so the
+  # React layer never contains hardcoded path strings.
+  #
+  # Used as a hook by SyncBackendStateCommand > OfferStateSync (post-accept redirect).
+  # ─────────────────────────────────────────────────────────────────────────────
+  NavigateCommand:
+    commandName: navigate
+    baseType: ViewBase
+    objectType: NavigationEvent
+    returnType: RouteTarget
+    subjectUnion:
+      - DashboardView
+      - BuyerWorkspaceView
+      - SellerWorkspaceView
+      - ListingDetailView
+      - OfferNegotiationView
+      - ShowingCalendarView
+      - TransactionTrackerView
+      - DisclosureWizardView
+    dispatch:
+      DashboardView: DashboardNavigator
+      BuyerWorkspaceView: WorkspaceNavigator.BuyerNavigator
+      SellerWorkspaceView: WorkspaceNavigator.SellerNavigator
+      ListingDetailView: ListingNavigator
+      OfferNegotiationView: OfferNavigator
+      ShowingCalendarView: ShowingNavigator
+      TransactionTrackerView: TransactionNavigator
+      DisclosureWizardView: DisclosureNavigator
+    templates:
+      # Dashboard can navigate to: BuyerWorkspace, SellerWorkspace,
+      # TransactionTracker (when a flagged deal is clicked).
+      DashboardNavigator:
+        isParameterized: false
+        subjectSubset: [DashboardView]
+        strategies: {}
+
+      # Abstract parameterized workspace navigator.
+      # Shared guard (unsaved changes prompt) in execute();
+      # route resolution delegated to computeRoute() per Strategy.
+      WorkspaceNavigator:
+        isParameterized: true
+        subjectSubset: [BuyerWorkspaceView, SellerWorkspaceView]
+        strategies:
+          # Buyer workspace can navigate to: ListingDetail, ShowingCalendar,
+          # OfferNegotiation, TransactionTracker, Dashboard.
+          BuyerNavigator:
+            subjectSubset: [BuyerWorkspaceView]
+          # Seller workspace can navigate to: OfferNegotiation, TransactionTracker,
+          # DisclosureWizard, Dashboard.
+          SellerNavigator:
+            subjectSubset: [SellerWorkspaceView]
+
+      # Listing detail can navigate to: ShowingCalendar (book a showing),
+      # OfferNegotiation (make an offer), BuyerWorkspace (back to match list).
+      ListingNavigator:
+        isParameterized: false
+        subjectSubset: [ListingDetailView]
+        strategies: {}
+
+      # Offer negotiation can navigate to: TransactionTracker (after accept),
+      # BuyerWorkspace or SellerWorkspace (after reject), Dashboard.
+      OfferNavigator:
+        isParameterized: false
+        subjectSubset: [OfferNegotiationView]
+        strategies: {}
+
+      # Showing calendar can navigate to: ListingDetail (from a booked slot),
+      # BuyerWorkspace (after feedback submitted), Dashboard.
+      ShowingNavigator:
+        isParameterized: false
+        subjectSubset: [ShowingCalendarView]
+        strategies: {}
+
+      # Transaction tracker can navigate to: DisclosureWizard (from a milestone),
+      # OfferNegotiation (view accepted offer), Dashboard.
+      TransactionNavigator:
+        isParameterized: false
+        subjectSubset: [TransactionTrackerView]
+        strategies: {}
+
+      # Disclosure wizard can navigate to: TransactionTracker (after packet submitted),
+      # SellerWorkspace (save and exit), Dashboard.
+      DisclosureNavigator:
+        isParameterized: false
+        subjectSubset: [DisclosureWizardView]
+        strategies: {}

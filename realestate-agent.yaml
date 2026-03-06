@@ -1,0 +1,415 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# LocalEdge — Real Estate Agent Platform Domain
+#
+# Purpose:
+#   Fills the workflow gap left by consumer-facing real estate platforms
+#   (Zillow, Realtor.com, Redfin) by giving local agents a structured,
+#   compile-safe engine for managing every interaction across the full
+#   buyer/seller lifecycle — from first contact to post-close follow-up.
+#
+# Workflow Gaps Addressed:
+#   1. No unified next-step engine for agents juggling buyers & sellers
+#   2. Poor buyer-to-listing matching (criteria drift, no push alerts)
+#   3. Offer negotiation handled outside the platform (email/text)
+#   4. Showing scheduling lacks conflict detection and feedback capture
+#   5. Transaction milestones scattered across tools (CRM, email, calendar)
+#   6. Disclosure compliance is manual, error-prone, and state-specific
+#
+# Domain Architecture:
+#   Six codascon Commands cover the full lifecycle:
+#
+#   QualifyParticipantCommand  → onboard buyers & sellers, surface next steps
+#   MatchPropertyCommand       → pull-match (buyer browsing) + push-match (new listings)
+#   ProcessOfferCommand        → submit, review, negotiate, accept, reject offers
+#   ScheduleShowingCommand     → request, confirm, and capture feedback on showings
+#   AdvanceTransactionCommand  → drive milestone progression through close
+#   GenerateDisclosureCommand  → assemble state-compliant disclosure packets
+#
+# Generated File Structure (via `npx odetovibe realestate-agent.yaml --out src/`):
+#
+#   src/
+#   └── realestate/
+#       ├── ParticipantTypes.ts      ← BuyerProfile, SellerProfile subjects + base types
+#       ├── PropertyTypes.ts         ← PropertyListing, OfferDocument, ShowingRequest,
+#       │                               TransactionRecord subjects + plain context types
+#       └── commands/
+#           ├── QualifyParticipant.ts
+#           ├── MatchProperty.ts
+#           ├── ProcessOffer.ts
+#           ├── ScheduleShowing.ts
+#           ├── AdvanceTransaction.ts
+#           └── GenerateDisclosure.ts
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+
+namespace: realestate
+
+# ─── Domain Types ───────────────────────────────────────────────────────────────
+#
+# Types WITH `visitName`  → Subjects (participate in double dispatch)
+# Types WITHOUT `visitName` → Plain types (context, result, base types)
+#
+domainTypes:
+
+  # ── Base types (shared interfaces, no dispatch) ───────────────────────────────
+
+  # Shared base for BuyerProfile and SellerProfile.
+  # Captures the common identity and contact surface every participant carries.
+  Participant:
+
+  # Shared base for PropertyListing and OfferDocument.
+  # Ties property-side entities to a common address/MLS anchor.
+  PropertyContext:
+
+  # ── Subjects (entities that drive dispatch) ───────────────────────────────────
+
+  # A prospective home buyer — carries criteria, financial profile, and journey state.
+  # Gap filled: agents finally have a single source of truth for buyer intent.
+  BuyerProfile:
+    visitName: resolveBuyer
+
+  # A home seller — carries listing goals, timeline, and property context.
+  # Gap filled: seller onboarding is a structured workflow, not a free-form conversation.
+  SellerProfile:
+    visitName: resolveSeller
+
+  # An active MLS listing enriched with agent-curated metadata.
+  # Gap filled: listings are first-class participants in push-matching,
+  # not just search results to scroll through.
+  PropertyListing:
+    visitName: resolveListing
+
+  # An offer or counter-offer document within an active negotiation thread.
+  # Gap filled: every offer lives inside the platform with full audit history.
+  OfferDocument:
+    visitName: resolveOffer
+
+  # A showing appointment — requested, pending confirmation, or completed.
+  # Gap filled: scheduling, reminders, and post-showing feedback are one flow.
+  ShowingRequest:
+    visitName: resolveShowing
+
+  # A live transaction record from accepted offer through close.
+  # Gap filled: milestone tracking replaces scattered calendar entries and emails.
+  TransactionRecord:
+    visitName: resolveTransaction
+
+  # ── Plain types (context objects, result types, value objects) ─────────────────
+
+  # The licensed agent — carries license info, brokerage, active portfolio refs.
+  Agent:
+
+  # Buyer's search criteria: location, price range, beds/baths, must-haves.
+  PropertyCriteria:
+
+  # Buyer's financial position: pre-approval status, lender, loan type, down payment.
+  FinancialProfile:
+
+  # Full listing details: address, photos, price, HOA, lot size, year built.
+  ListingDetails:
+
+  # Offer economics: purchase price, earnest money, contingencies, closing date.
+  OfferTerms:
+
+  # A candidate showing slot: proposed datetime, lockbox/agent-present flag.
+  ShowingSlot:
+
+  # A milestone timeline: ordered list of steps from accepted offer to close.
+  MilestoneTimeline:
+
+  # Result of a buyer-to-listing match: score, matched criteria, gap analysis.
+  MatchResult:
+
+  # The next recommended action for the agent and the participant.
+  # Core gap-filling type: replaces "what do I do next?" with a structured step.
+  WorkflowStep:
+
+  # Generic success/failure result for transactional commands.
+  ActionResult:
+
+  # A compliance check result: required disclosures, completion status, warnings.
+  ComplianceCheck:
+
+  # Feedback captured after a showing: rating, buyer interest level, concerns.
+  ShowingFeedback:
+
+  # Summary of a negotiation round: current terms, positions, recommended move.
+  NegotiationSummary:
+
+# ─── Commands ───────────────────────────────────────────────────────────────────
+
+commands:
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # QualifyParticipantCommand
+  #
+  # Onboards a buyer or seller and surfaces the single next recommended action.
+  # Fills the gap of "where do I start?" — agents get a checklist, not a blank screen.
+  #
+  # Buyer path:  check pre-approval → capture criteria → assign search alert tier
+  # Seller path: CMA request → pricing strategy → disclosure checklist kickoff
+  # ─────────────────────────────────────────────────────────────────────────────
+  QualifyParticipantCommand:
+    commandName: qualifyParticipant
+    baseType: Participant
+    objectType: Agent
+    returnType: WorkflowStep
+    subjectUnion:
+      - BuyerProfile
+      - SellerProfile
+    dispatch:
+      BuyerProfile: ParticipantQualifier.BuyerQualifier
+      SellerProfile: ParticipantQualifier.SellerQualifier
+    templates:
+      # Abstract parameterized base — shared qualification scaffold.
+      # execute() drives the checklist loop; computeNextStep() is strategy-specific.
+      ParticipantQualifier:
+        isParameterized: true
+        subjectSubset: [BuyerProfile, SellerProfile]
+        strategies:
+          # Checks pre-approval completeness, criteria coverage, and urgency tier.
+          BuyerQualifier:
+            subjectSubset: [BuyerProfile]
+          # Checks CMA status, listing readiness, and disclosure obligations.
+          SellerQualifier:
+            subjectSubset: [SellerProfile]
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # MatchPropertyCommand
+  #
+  # Dual-direction matching: buyers pull against criteria; new listings push
+  # to matched buyer pools. Fills the gap of stale saved searches and missed
+  # opportunities when a well-matched listing hits the market.
+  #
+  # Pull path (BuyerProfile):  score all active listings against buyer criteria
+  # Push path (PropertyListing): find all buyers whose criteria match this listing
+  # ─────────────────────────────────────────────────────────────────────────────
+  MatchPropertyCommand:
+    commandName: matchProperty
+    baseType: Participant
+    objectType: PropertyCriteria
+    returnType: MatchResult
+    subjectUnion:
+      - BuyerProfile
+      - PropertyListing
+    dispatch:
+      BuyerProfile: CriteriaMatchTemplate
+      PropertyListing: ListingPushTemplate
+    templates:
+      # Buyer-driven pull: score all active listings against the buyer's criteria.
+      # Surfaces gap analysis (e.g. "3 of your 5 must-haves are met") per listing.
+      CriteriaMatchTemplate:
+        isParameterized: false
+        subjectSubset: [BuyerProfile]
+        strategies: {}
+
+      # Listing-driven push: find buyers whose saved criteria this listing satisfies.
+      # Generates instant alert payloads for the agent to send to matched buyers.
+      ListingPushTemplate:
+        isParameterized: false
+        subjectSubset: [PropertyListing]
+        strategies: {}
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # ProcessOfferCommand
+  #
+  # Full offer lifecycle — from buyer submission through seller decision and
+  # optional counter-offer loop. Fills the gap of offers living in email threads;
+  # every version is versioned, timestamped, and tied to the listing record.
+  #
+  # Buyer path (BuyerProfile):  draft and submit an initial offer
+  # Seller path (SellerProfile): review an incoming offer and choose a response
+  # Offer path (OfferDocument):  execute the chosen negotiation strategy
+  # ─────────────────────────────────────────────────────────────────────────────
+  ProcessOfferCommand:
+    commandName: processOffer
+    baseType: Participant
+    objectType: OfferTerms
+    returnType: ActionResult
+    subjectUnion:
+      - BuyerProfile
+      - SellerProfile
+      - OfferDocument
+    dispatch:
+      BuyerProfile: SubmitOfferTemplate
+      SellerProfile: ReviewOfferTemplate
+      OfferDocument: NegotiationTemplate.CounterOfferStrategy
+    templates:
+      # Guides the buyer's agent through offer construction: price, contingencies,
+      # earnest money, and closing timeline. Validates completeness before submission.
+      SubmitOfferTemplate:
+        isParameterized: false
+        subjectSubset: [BuyerProfile]
+        strategies: {}
+
+      # Presents the seller with a normalized offer summary, comparable sales,
+      # and a recommended response. Reduces "what should I do?" to a guided choice.
+      ReviewOfferTemplate:
+        isParameterized: false
+        subjectSubset: [SellerProfile]
+        strategies: {}
+
+      # Abstract negotiation handler — parameterized by offer resolution path.
+      # execute() persists the offer mutation; computeResolution() is strategy-specific.
+      NegotiationTemplate:
+        isParameterized: true
+        subjectSubset: [OfferDocument]
+        strategies:
+          # Seller counters with modified terms. Produces a new OfferDocument version.
+          CounterOfferStrategy:
+            subjectSubset: [OfferDocument]
+          # Seller (or buyer) accepts current terms. Triggers transaction creation.
+          AcceptOfferStrategy:
+            subjectSubset: [OfferDocument]
+          # Offer is rejected. Logs reason and returns buyer to MatchProperty flow.
+          RejectOfferStrategy:
+            subjectSubset: [OfferDocument]
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # ScheduleShowingCommand
+  #
+  # End-to-end showing management: request → confirm → feedback capture.
+  # Fills the gap of showing coordination happening across texts, calls, and
+  # lockbox apps with no unified record or follow-up trigger.
+  #
+  # Buyer path (BuyerProfile):        submit a showing request for a listing
+  # Showing path (ShowingRequest):    confirm/cancel/reschedule a pending request
+  # Listing path (PropertyListing):   expose available time slots for a property
+  # ─────────────────────────────────────────────────────────────────────────────
+  ScheduleShowingCommand:
+    commandName: scheduleShowing
+    baseType: Participant
+    objectType: ShowingSlot
+    returnType: ActionResult
+    subjectUnion:
+      - BuyerProfile
+      - ShowingRequest
+      - PropertyListing
+    dispatch:
+      BuyerProfile: RequestShowingTemplate
+      ShowingRequest: ConfirmShowingTemplate
+      PropertyListing: ShowingAvailabilityTemplate
+    templates:
+      # Buyer-side: selects from available slots, checks buyer schedule conflicts,
+      # and queues automated reminder/feedback tasks.
+      RequestShowingTemplate:
+        isParameterized: false
+        subjectSubset: [BuyerProfile]
+        strategies: {}
+
+      # Showing-side: confirms, cancels, or reschedules a pending request.
+      # On completion, triggers ShowingFeedback capture workflow.
+      ConfirmShowingTemplate:
+        isParameterized: false
+        subjectSubset: [ShowingRequest]
+        strategies: {}
+
+      # Listing-side: returns available showing windows respecting seller
+      # blackout periods, occupancy, and agent-present requirements.
+      ShowingAvailabilityTemplate:
+        isParameterized: false
+        subjectSubset: [PropertyListing]
+        strategies: {}
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # AdvanceTransactionCommand
+  #
+  # Milestone-driven transaction progression from accepted offer to close.
+  # Fills the gap of agents manually tracking 20+ steps across email, calendar,
+  # and broker software with no unified view for buyers or sellers.
+  #
+  # Buyer path (BuyerProfile):         surface buyer-side milestones (financing, inspection)
+  # Seller path (SellerProfile):       surface seller-side milestones (disclosures, repairs)
+  # Transaction path (TransactionRecord): compute overall progress and critical-path risks
+  # ─────────────────────────────────────────────────────────────────────────────
+  AdvanceTransactionCommand:
+    commandName: advanceTransaction
+    baseType: Participant
+    objectType: MilestoneTimeline
+    returnType: WorkflowStep
+    subjectUnion:
+      - BuyerProfile
+      - SellerProfile
+      - TransactionRecord
+    dispatch:
+      BuyerProfile: BuyerMilestoneTemplate.FinancingMilestone
+      SellerProfile: SellerMilestoneTemplate.DisclosureMilestone
+      TransactionRecord: TransactionProgressTemplate
+    templates:
+      # Abstract buyer-side milestone base.
+      # execute() advances the buyer's required steps; hook: GenerateDisclosureCommand
+      # is available when buyer-side disclosure review is needed.
+      BuyerMilestoneTemplate:
+        isParameterized: true
+        subjectSubset: [BuyerProfile]
+        commandHooks:
+          generateDisclosure: GenerateDisclosureCommand
+        strategies:
+          # Drives loan application → appraisal → final approval sequence.
+          FinancingMilestone:
+            subjectSubset: [BuyerProfile]
+          # Drives inspection scheduling → report review → repair request sequence.
+          InspectionBuyerMilestone:
+            subjectSubset: [BuyerProfile]
+
+      # Abstract seller-side milestone base.
+      # execute() advances the seller's required steps; hook: GenerateDisclosureCommand
+      # is used to assemble and validate the seller's disclosure packet.
+      SellerMilestoneTemplate:
+        isParameterized: true
+        subjectSubset: [SellerProfile]
+        commandHooks:
+          generateDisclosure: GenerateDisclosureCommand
+        strategies:
+          # Drives disclosure packet assembly → review → delivery.
+          DisclosureMilestone:
+            subjectSubset: [SellerProfile]
+          # Drives inspection response → repair negotiation → completion verification.
+          InspectionSellerMilestone:
+            subjectSubset: [SellerProfile]
+
+      # Concrete transaction-level progress tracker.
+      # Computes overall critical-path status, date-drift alerts, and
+      # surfaces the single most urgent action across buyer and seller timelines.
+      TransactionProgressTemplate:
+        isParameterized: false
+        subjectSubset: [TransactionRecord]
+        strategies: {}
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # GenerateDisclosureCommand
+  #
+  # Assembles state-compliant disclosure packets for sellers and surfaces
+  # required review items for buyers. Fills the gap of agents manually
+  # compiling PDFs from state board templates with no completeness validation.
+  #
+  # Seller path (SellerProfile):    build and validate the seller disclosure packet
+  # Listing path (PropertyListing): check property-level disclosure triggers
+  #                                 (HOA, lead paint, flood zone, permits)
+  # ─────────────────────────────────────────────────────────────────────────────
+  GenerateDisclosureCommand:
+    commandName: generateDisclosure
+    baseType: Participant
+    objectType: PropertyContext
+    returnType: ComplianceCheck
+    subjectUnion:
+      - SellerProfile
+      - PropertyListing
+    dispatch:
+      SellerProfile: SellerDisclosureTemplate
+      PropertyListing: PropertyDisclosureTemplate
+    templates:
+      # Walks the seller through state-specific required disclosure forms,
+      # validates completeness, and flags missing items before listing goes live.
+      SellerDisclosureTemplate:
+        isParameterized: false
+        subjectSubset: [SellerProfile]
+        strategies: {}
+
+      # Checks property attributes against disclosure trigger rules:
+      # flood zone, HOA presence, known permits, lead-paint age threshold.
+      # Returns a ComplianceCheck with required forms and completion status.
+      PropertyDisclosureTemplate:
+        isParameterized: false
+        subjectSubset: [PropertyListing]
+        strategies: {}
